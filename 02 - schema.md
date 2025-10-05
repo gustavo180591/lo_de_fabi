@@ -1,0 +1,341 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User and Authentication
+model User {
+  id                String          @id @default(uuid())
+  email             String          @unique
+  name              String
+  auditLogs         AuditLog[]
+  phone             String?         @unique
+  password          String          // Hashed password
+  role              UserRole        @default(PLAYER)
+  emailVerified     Boolean         @default(false)
+  phoneVerified     Boolean         @default(false)
+  avatar            String?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+  
+  // Relations
+  teamMemberships   TeamMember[]
+  payments          Payment[]
+  notifications     Notification[]
+  waitlistEntries   Waitlist[]
+  reservations      Reservation[]   @relation("CaptainReservations")
+  playerReservations ReservationPlayer[]
+  
+  @@index([email, phone])
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  CAPTAIN
+  PLAYER
+}
+
+// Teams
+model Team {
+  id          String        @id @default(uuid())
+  name        String
+  logo        String?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  
+  // Relations
+  members     TeamMember[]
+  reservations Reservation[]
+  
+  @@index([name])
+}
+
+model TeamMember {
+  id        String   @id @default(uuid())
+  teamId    String
+  userId    String
+  role      TeamRole @default(MEMBER)
+  joinedAt  DateTime @default(now())
+  
+  // Relations
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@unique([teamId, userId])
+}
+
+enum TeamRole {
+  CAPTAIN
+  CO_CAPTAIN
+  MEMBER
+}
+
+// Fields and Facilities
+model Field {
+  id          String     @id @default(uuid())
+  name        String
+  description String?
+  isIndoor    Boolean    @default(false)
+  isActive    Boolean    @default(true)
+  capacity    Int
+  images      String[]
+  amenities   String[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  
+  // Relations
+  timeSlots   TimeSlot[]
+  reservations Reservation[]
+  waitlists   Waitlist[]
+  
+  @@index([name, isIndoor])
+}
+
+// Pricing and Availability
+model TimeSlot {
+  id          String     @id @default(uuid())
+  fieldId     String
+  dayOfWeek   Int        // 0-6 (Sunday-Saturday)
+  startTime   String     // Format: "HH:MM"
+  endTime     String     // Format: "HH:MM"
+  price       Float
+  isPeak      Boolean    @default(false)
+  isActive    Boolean    @default(true)
+  
+  // Relations
+  field       Field      @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  reservations Reservation[]
+  
+  @@unique([fieldId, dayOfWeek, startTime])
+}
+
+// Reservations
+model Reservation {
+  id              String              @id @default(uuid())
+  code            String              @unique
+  captainId       String
+  teamId          String?
+  fieldId         String
+  timeSlotId      String
+  date            DateTime
+  status          ReservationStatus   @default(PENDING)
+  depositAmount   Float
+  totalAmount     Float
+  depositPaid     Boolean             @default(false)
+  fullAmountPaid  Boolean             @default(false)
+  isSplitPayment  Boolean             @default(false)
+  splitDueDate    DateTime?
+  cancellationPolicyAcknowledged Boolean @default(false)
+  cancellationReason String?
+  cancellationDate DateTime?
+  refundAmount    Float?              @default(0)
+  refundStatus    RefundStatus?       @default(NONE)
+  isNoShow        Boolean             @default(false)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  
+  // Relations
+  captain         User                @relation("CaptainReservations", fields: [captainId], references: [id])
+  team            Team?               @relation(fields: [teamId], references: [id])
+  field           Field               @relation(fields: [fieldId], references: [id])
+  timeSlot        TimeSlot            @relation(fields: [timeSlotId], references: [id])
+  players         ReservationPlayer[]
+  payments        Payment[]
+  waitlist        Waitlist[]
+  
+  @@index([code, status, date, captainId])
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  WAITLISTED
+}
+
+enum RefundStatus {
+  NONE
+  PENDING
+  PROCESSED
+  FAILED
+  PARTIAL
+  CREDIT_ISSUED
+}
+
+model ReservationPlayer {
+  id             String      @id @default(uuid())
+  reservationId  String
+  userId         String
+  name           String
+  phone          String
+  email          String?
+  amount         Float
+  status         PaymentStatus @default(PENDING)
+  paymentLink    String?
+  paymentLinkExpiresAt DateTime?
+  paidAt        DateTime?
+  
+  // Relations
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  user          User?       @relation(fields: [userId], references: [id])
+  payments      Payment[]
+  
+  @@index([reservationId, userId, status])
+}
+
+// Payments
+model Payment {
+  id              String      @id @default(uuid())
+  amount          Float
+  currency        String      @default("ARS")
+  status          PaymentStatus
+  paymentMethod   String      // 'MERCADOPAGO', 'CREDIT_CARD', 'CASH', etc.
+  paymentIntentId String?     // External payment processor ID
+  metadata        Json?       // Store additional payment data
+  paidAt          DateTime?
+  refundedAt      DateTime?
+  refundAmount    Float?      @default(0)
+  reservationId   String?
+  playerId        String?
+  userId          String
+  
+  // Relations
+  reservation    Reservation? @relation(fields: [reservationId], references: [id])
+  player         ReservationPlayer? @relation(fields: [playerId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
+  
+  @@index([paymentIntentId, status, userId])
+}
+
+enum PaymentStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+  REFUNDED
+  PARTIALLY_REFUNDED
+  CANCELLED
+  EXPIRED
+}
+
+// Waitlist
+model Waitlist {
+  id             String     @id @default(uuid())
+  userId         String
+  fieldId        String
+  date           DateTime
+  startTime      String
+  endTime        String
+  status         WaitlistStatus @default(WAITING)
+  expiresAt      DateTime
+  notifiedAt     DateTime?
+  reservationId  String?
+  
+  // Relations
+  user          User       @relation(fields: [userId], references: [id])
+  field         Field      @relation(fields: [fieldId], references: [id])
+  reservation   Reservation? @relation(fields: [reservationId], references: [id])
+  
+  @@index([fieldId, date, status])
+}
+
+enum WaitlistStatus {
+  WAITING
+  NOTIFIED
+  CONVERTED
+  EXPIRED
+  CANCELLED
+}
+
+// Notifications
+model Notification {
+  id            String           @id @default(uuid())
+  userId        String
+  type          NotificationType
+  title         String
+  message       String
+  isRead        Boolean          @default(false)
+  relatedId     String?          // Can reference reservation, payment, etc.
+  relatedType   String?          // 'RESERVATION', 'PAYMENT', etc.
+  metadata      Json?            // Additional data
+  scheduledAt   DateTime?
+  sentAt        DateTime?
+  readAt        DateTime?
+  
+  // Relations
+  user          User             @relation(fields: [userId], references: [id])
+  
+  @@index([userId, isRead, type])
+}
+
+enum NotificationType {
+  RESERVATION_CONFIRMATION
+  PAYMENT_RECEIVED
+  PAYMENT_REMINDER
+  SPLIT_PAYMENT_REQUEST
+  SPLIT_PAYMENT_RECEIVED
+  RESERVATION_REMINDER
+  CANCELLATION
+  REFUND_PROCESSED
+  WAITLIST_AVAILABLE
+  WEATHER_ALERT
+  SYSTEM_ALERT
+}
+
+// System Settings
+model SystemSetting {
+  id          String   @id @default(uuid())
+  key         String   @unique
+  value       String
+  description String?
+  isPublic    Boolean  @default(false)
+  updatedAt   DateTime @updatedAt
+  
+  @@index([key])
+}
+
+// Weather Alerts
+model WeatherAlert {
+  id              String      @id @default(uuid())
+  alertType       String      // 'STORM', 'RAIN', 'HEAT', etc.
+  severity        String      // 'ADVISORY', 'WATCH', 'WARNING', 'EMERGENCY'
+  startTime       DateTime
+  endTime         DateTime
+  description     String
+  affectedFields  String[]    // Field IDs or 'ALL'
+  actionsTaken    String[]    // 'NOTIFIED_USERS', 'OFFERED_RESCHEDULE', etc.
+  isActive        Boolean     @default(true)
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+  
+  @@index([startTime, endTime, isActive])
+}
+
+// Audit Log
+model AuditLog {
+  id          String    @id @default(uuid())
+  action      String
+  entityType  String    // 'USER', 'RESERVATION', 'PAYMENT', etc.
+  entityId    String
+  userId      String?
+  ipAddress   String?
+  userAgent   String?
+  metadata    Json?
+  createdAt   DateTime  @default(now())
+  
+  // Relations
+  user        User?     @relation(fields: [userId], references: [id])
+  
+  @@index([action, entityType, entityId, userId])
+}
